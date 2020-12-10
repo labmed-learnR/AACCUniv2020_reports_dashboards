@@ -1,0 +1,134 @@
+---
+title: "Exploratory Data Analysis"
+author: "Shannon Haymond, PhD"
+subtitle: "| NHANES Survey 2003-2004 Iron Biomarkers in Children 3-5 y \n"
+output:
+  pdf_document:
+    toc: yes
+  html_notebook: cosmo
+  html_document:
+    theme: cosmo
+    toc: yes
+    toc_float: yes
+---
+
+```{r setup, include=FALSE}
+
+knitr::opts_chunk$set(echo = FALSE)
+
+#install.packages(c("tidyverse", "janitor", "skimr", "kableExtra", "corrplot", "knitr"))
+library(tidyverse)
+library(janitor)
+library(skimr)
+library(kableExtra)
+library(corrplot)
+
+```
+Report Date: `r Sys.time()`  
+
+## Introduction
+This report describes a basic exploratory data analysis of laboratory data from the 2003-2004 NHANES Survey measurements of iron status in children aged 3-5 years old.  
+
+[NHANES 2003-2004 Laboratory Data Page](https://wwwn.cdc.gov/nchs/nhanes/Search/DataPage.aspx?Component=Laboratory&CycleBeginYear=2003)
+
+## Data Description
+
+  
+```{r read data, include = FALSE}
+nhanes_fe <- read_csv(file = "data/NHANES_FeMarkers_3to5y.csv",
+                      col_types = cols(Subject = col_factor(),
+                                       Gender = col_factor(),
+                                       Age_months = col_integer(),
+                                       Race_ethn = col_factor())) %>%
+              mutate(Gender = recode(Gender, 
+                                     `1` = "Male", `2` = "Female"),
+                     Race_ethn = recode(Race_ethn, 
+                                        `1` = "Mexican American", 
+                                        `2` = "Other Hispanic",
+                                        `3` = "Non-Hispanic White",
+                                        `4` = "Non-Hispanic Black",
+                                        `5` = "Other Race - Including Multi-Racial")) %>%
+  clean_names()
+
+#glimpse(nhanes_fe) #demographics and lab values
+```
+
+The data file was received from a collaborator who accessed the NHANES data source files and performed preliminary clean up and filtering to yield complete cases of children 1-3 years old with ferritin and CBC parameters.The dataset includes `r nrow(nhanes_fe)` observations with `r ncol(nhanes_fe)` variables.  
+
+## Summary Statistics
+
+### Statistical summary of factor variables   
+```{r summary stats factor}
+nhanes_fe_skim <- skim(nhanes_fe)
+
+knitr::kable(partition(nhanes_fe_skim)$factor, digits = 2) %>%
+  kable_styling()
+
+```
+  
+There are 3 categorical (factor) variables in this dataset representing subject ID, gender, and race/ethnicity. There are 295 unique cases with no missing data for these variables.  
+
+### Statistical summary of numeric variables   
+```{r summary stats num}
+knitr::kable(partition(nhanes_fe_skim)$numeric, digits = 2) %>%
+  kable_styling()
+
+```
+  
+There are 7 numeric variables, representing subject age (in months) and several laboratory measurements related to iron status. There are no missing data for these variables. Ferritin, iron, and transferrin saturation are skewed to the right. Mean and standard deviations are shown in the Table above. The mean age for all subjects is `r round(mean(nhanes_fe$age_months),0)` months.  
+
+
+## Visual Data Exploration
+
+```{r data prep plotting}
+# will want to facet plots to make small multiple plots, so must get into long format
+nhanes_fe_long <- nhanes_fe %>%
+                    pivot_longer(c(age_months, ft_ngd_l:tf_sat_pct), 
+                                 names_to = "variable", values_to = "value")
+```
+
+### Box Plots by Gender and Race/Ethnicity  
+```{r box plots}
+ggplot(nhanes_fe_long, aes(y = value, x = race_ethn)) +
+  geom_boxplot(aes(fill = gender), alpha=0.8) +
+  facet_grid(~variable, scales = "free") +
+  theme_bw() +
+  theme(legend.position = "top", text = element_text(size = 10),
+        axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5)) +
+  scale_fill_manual(values = c("dodgerblue2", "darkorange1")) +
+  labs(x = "") +
+  coord_flip()
+```
+  
+The box plots show little difference in values by gender or by race_ethnicity. There are outliers present in the data that will need to be addressed.  
+
+
+### Bar Plots of Race/Ethnicity by Gender
+```{r bar plots}
+ggplot(nhanes_fe, aes(x = race_ethn)) +
+  geom_bar(aes(fill = gender), alpha = 0.8, position = "dodge") +
+  theme_bw() +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5), 
+        legend.position = "top", text = element_text(size = 14)) +
+  labs(x = "") +
+  coord_flip() +
+  scale_fill_manual(values = c("dodgerblue2", "darkorange1"))
+```
+  
+The representation gender is reasonably balanced across all race/ethnicity categories. The 'Other' categories have the fewest subjects.  
+
+
+### Correlation Plot for Numeric Variables
+```{r correlations}
+cors <- nhanes_fe %>% 
+        select_if(is.numeric) %>%
+        cor(use = 'pairwise.complete.obs')
+
+corrplot(cors, type="lower", method="circle", addCoef.col="black", 
+         number.cex=0.5, tl.cex = 0.75, tl.col = "black",
+         diag=FALSE)
+
+```
+
+There are several weak correlations (in both positive and negative directions) among the numeric variables. The most notable correlation is  strongly positive, between transferrin saturation and iron (r^2 = 0.97).  
+

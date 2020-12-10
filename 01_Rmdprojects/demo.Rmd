@@ -1,0 +1,38 @@
+---
+title: "My own test"
+author: Your Name Here
+output: html_notebook
+
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+library(tidyverse)
+library(kableExtra)
+
+```
+
+This notebook was made using RMarkdown and some of its very useful features. 
+
+
+```{r data, include = FALSE}
+my_data <- read_csv(file = "data/NHANES_FeMarkers_3to5y.csv")
+```
+
+
+**Table 1. Summary Statistics**
+```{r table}
+knitr::kable(summary(my_data)) %>%
+        kable_styling()
+```
+
+
+There are `r nrow(my_data)` observations in this dataset. The mean age is `r round(mean(my_data$Age_months),0)` months. 
+
+
+
+*Figure 1. Transferrin vs Iron*  
+```{r plot}
+ggplot(my_data, aes(x = Fe_ugdL, y = TfSat_pct)) +
+  geom_point()
+```
