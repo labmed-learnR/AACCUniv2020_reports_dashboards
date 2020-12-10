@@ -9,7 +9,7 @@ Nationwide Children's Hospital, Columbus, OH
 ### Daniel T. Holmes, MD  
 Department Head  
 Department of Pathology and Laboratory Medicine  
-St. Paul's Hospital, Vanouver, BC  
+St. Paul's Hospital, Vancouver, BC  
 
 ### Shannon Haymond, PhD  
 Vice Chair for Computational Pathology  
