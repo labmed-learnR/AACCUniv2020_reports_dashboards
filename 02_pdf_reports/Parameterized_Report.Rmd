@@ -1,0 +1,157 @@
+---
+author: "Dustin R. Bunch"
+date: "November 23rd, 2020"
+geometry: margin=0.75in
+header-includes:
+- \usepackage{fancyhdr}
+- \pagestyle{fancy}
+- \fancyhead[LO,LE]{\includegraphics[width=4in,height=1.5in]{Example_header.jpg}\\}
+- \fancyhead[RO,RE]{Department of Pathology \\ and Laboratory Medicine,\\ Biochemical
+  Genectis Section}
+- \fancyfoot[LO,LE]{Institutional Disclaimer:}
+output:
+  pdf_document: default
+  html_document:
+    df_print: paged
+params:
+   start: !r lubridate::today()-30
+   end: !r lubridate::today()
+   testcode: "PATY"
+   analyte: "phe"
+   data:
+      label: "Input Dataset:"
+      value: data/2020_AACC_DATASET.csv
+      input: file
+---
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, message = FALSE, warning = FALSE)
+```
+
+```{r, pkgs_libraries, include=FALSE}
+# This code will install required packages if they are not already installed
+# This is useful for teaching but not requied
+
+if (!require("knitr")) {
+   install.packages("knitr")
+   library(knitr)
+}
+if (!require("janitor")) {
+   install.packages("janitor")
+   library(janitor)
+}
+if (!require("tidyverse")) {
+   install.packages("tidyverse")
+   library(tidyverse)
+}
+if (!require("kableExtra")) {
+   install.packages("kableExtra")
+   library(kableExtra)
+}
+if (!require("here")) {
+   install.packages("here")
+   library(here)
+}
+```
+\hfill\break
+\hfill\break
+# Basic QC Report
+
+This is an example of a R Markdown document for creating basic reports. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com> and <https://bookdown.org/yihui/rmarkdown/>.
+
+
+```{r import_data, include =FALSE}
+### Import the major dataset 
+dataset_df <- read.csv(here::here("data",
+                                   "2020_AACC_DATASET.csv")) %>%
+                                   janitor::clean_names()
+### Import the supporting dataset
+expected_df <- readxl::read_xlsx(here::here("data",
+                                   "2020_AACC_expected_values.xlsx")) %>%
+                                   janitor::clean_names()
+```
+
+```{r data_wrangling}
+### Adjust any data type issues
+dataset_df$date <- as.Date(dataset_df$date, "%m/%d/%Y")
+dataset_df$x11desc <- as.numeric(dataset_df$x11desc)
+dataset_df$test_code <- as.factor(dataset_df$test_code )
+dataset_df$qc_code <- as.factor(dataset_df$qc_code )
+
+### Make the data set more tidy for tidyverse funtions
+dataset_df <- drop_na(pivot_longer(dataset_df, cols = c("tyr", "phe", "x17op", "prog", "cortms", "doc", "testms", "andro", "x11desc", "x17pre"), names_to = "analyte"))
+
+### Create start and end variable to be used throughout the report
+start_date <- as.Date("2020-09-01")
+end_date <- as.Date("2020-10-01")
+
+### Select a portion of the data for whcih to create the report 
+active_data <- dataset_df %>%
+   dplyr::filter(between(date, as.Date(params$start),
+                         as.Date(params$end)) & test_code == params$testcode & analyte == params$analyte ) 
+```
+
+**QC Data Table (`r params$start` to `r params$end`)**
+```{r qc_table, error=FALSE}
+###
+### Build the dataframe that will be on the report
+###
+
+### Group the data 
+active_df <- active_data  %>% 
+   group_by(qc_code, analyte) %>% 
+   summarise(
+   "Cal. Mean" = round(mean(value), 1),
+   "Cal. SD" = round(sd(value), 1),
+   "n" = length(value)
+)
+### Combine the primary and secondary data
+active_df <- active_df %>% 
+   left_join(expected_df, by = c("qc_code", "analyte")) %>% 
+   rename(
+   "Exp. Mean" = expected_mean,
+   "Exp. SD" = expected_sd,
+   "QC Code" = qc_code,
+   "Analyte" = analyte
+)
+
+### Perform some calculations
+active_df[['Cal. CV%']] <- round((active_df[['Cal. SD']]/active_df[['Cal. Mean']])*100, 1)
+active_df[["SDI"]] <- round((active_df[['Cal. Mean']]- active_df[['Exp. Mean']])/active_df[["Exp. SD"]] , 1)
+active_df[["SDR"]] <- round(active_df[["Exp. SD"]]/active_df[["Cal. SD"]] , 1)
+
+###
+### Use kable and kableExtra to format the table for pdf output
+###
+active_df %>%
+   kbl() %>%
+   kable_styling(font_size= 10, latex_options=c("scale_down", "HOLD_position"), bootstrap_options = c("striped", "hover", "condensed")) %>%
+   footnote(general = "SDI stands for standard deviation index and is calculated by substracting the expected and calculated means then dividing by the expected standard deviation (SD) with an ideal value of 0. SDI values between -0.8 to 0.8 are acceptable in my mass spectrometry lab. SDR is the standard deviation ratio and is calculated by dividing the expected SD by the calculated SD with an ideal value of 1. SDR values between 0.3 to 1.1 are acceptable in my mass spectrometry lab.", 
+            threeparttable = T)
+```
+
+```{r lv_chart, error=FALSE, fig.height=3}
+### Group, scale, and plot the data
+active_data %>% 
+   ### Group
+   group_by(qc_code) %>%
+   ### Scale so all the data fits on one plot
+   mutate(value_scaled = (value-mean(value))/sd(value)) %>%
+   ### Plot the data
+ggplot(aes(x = date, y = value_scaled, color = qc_code, ymin = -1, ymax = 1)) + 
+   ### 1 SD range
+   geom_ribbon( alpha = 0.3) +
+   ### 2 SD range
+   geom_ribbon(aes(ymin =-2, ymax = 2), alpha =0.2) +
+   ### 3 SD range
+   geom_ribbon(aes(ymin =-3, ymax = 3), alpha =0.1) +
+   geom_line() + 
+   geom_point() +
+   ggtitle("Levey-Jennings Chart") +
+   xlab("Date") +
+   ylab("SD Scaled Values")
+```
+
+\hfill\break
+\hfill\break
+\hfill\break
+![Signature Line](2020_AACC_2.JPG)\
