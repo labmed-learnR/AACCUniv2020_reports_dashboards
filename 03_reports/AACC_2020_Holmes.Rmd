@@ -1,0 +1,269 @@
+---
+title: "Automating Key Performance Indicator Reports"
+subtitle: "AACC University 2020, Doing More with R"
+author: "Daniel T. Holmes, MD"
+date: "13/12/2020"
+output:
+  html_document: default
+  pdf_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+```
+
+## My Go-to Packages for Automated Reports
+
+We will read in a cleansed example data set.
+
+```{r}
+library(tidyverse)
+library(lubridate)
+library(janitor)
+library(kableExtra)
+library(DT)
+library(plotly)
+
+my_data <- read_csv("AACC_DATA_Clean.csv") %>%
+  clean_names()
+```
+
+## Calculating the TAT Components
+
+We will add new columns for the purposes of presenting KPI statistics.
+
+```{r}
+my_data <- my_data %>%
+  #preanalytical
+  mutate(otc = difftime(collection_date, ordered_date, units = "min")) %>%
+  mutate(ctr = difftime(received_date, collection_date, units = "min")) %>%
+  #analytical
+  mutate(rtr = difftime(result_date, received_date, units = "min")) %>%
+  #total
+  mutate(otr = difftime(result_date, ordered_date, units = "min")) %>%
+  #for counting tests by date or calculating TAT by date
+  mutate(cdate = date(collection_date)) %>%
+  #for counting tests by date or calculating TAT by weekday
+  mutate(weekday = wday(collection_date, label = TRUE, abbr = TRUE)) %>%
+  #for counting tests by date or calculating TAT by hour of the day
+  mutate(hourofday = hour(collection_date))
+  #with a dataset spanning a longer time, you can make a factor for month of the year or week of the year with the month() function and week() function from lubridate
+```
+
+## kableExtra is awesome for HTML or PDF output
+
+We can now easily prepare data in a table in using the kableExtra package.
+
+```{r}
+table1 <- my_data %>%
+  group_by(resulting_lab, test) %>%
+  summarise(count = n(),
+            p50_otc = median(otc),
+            p90_otc = quantile(otc, probs = 0.9),
+            median_rtr = median(otc),
+            p90_rtr = quantile(rtr, probs = 0.9)) %>%
+  ungroup %>%
+  mutate_if(is.difftime, as.numeric)
+
+kable(table1,
+      digits = 1,
+      col.names = c("Hospital", "Test", "Count", "50th OTC (min)", "90th OTC (min)", "50th RTR (min)", "90th RTR (min)")) %>%
+  kable_styling(bootstrap_options = c("striped", "hover"))
+```
+### kableExtra grouping function
+
+This same data can be presented more intuitively by grouping rows.
+
+```{r}
+table1 %>%
+  select(-"resulting_lab") %>% #remove the resulting lab column
+  kable(digits = 1,
+      col.names = c("Test", "Count", "50th OTC (min)", "90th OTC (min)", "50th RTR (min)", "90th RTR (min)")) %>%
+  kable_styling(bootstrap_options = c("striped", "hover")) %>%
+  pack_rows("Hospital 1", 1, 5) %>%
+  pack_rows("Hospital 2", 6, 10)
+```
+
+### Within table boxplots and histograms are possible
+
+Amazingly, you can create within-table plots.
+
+```{r}
+otr <- split(as.numeric(my_data$otr), list(my_data$resulting_lab, my_data$test))
+my_data %>%
+  filter(priority == "S") %>%
+  group_by(resulting_lab, test) %>%
+  summarise(median_otr = median(otr)) %>%
+  ungroup %>%
+  mutate_if(is.difftime, as.numeric) %>%
+  arrange(test, resulting_lab) %>%
+  mutate(Histogram = "") %>%
+  kable(digits = 1,
+      col.names = c("Hospital", "Test", "Median OTR (min)", "Histogram"))  %>%
+  kable_styling(bootstrap_options = c("striped", "hover")) %>%
+  column_spec(4,image = spec_hist(otr, breaks = 100, lim = c(0,150)))
+```
+
+## The DT package works very well for long HTML tables
+
+If you want searchable, sortable tables for HTML output that allow convenient display of large datasets by means of multipage output, have a look at the datatable function of the DT package, not to be confused with the data.table package.
+
+```{r}
+my_data[,1:7] %>%
+  head(100) %>%
+datatable()
+```
+
+## Some Suggested Visualizations for KPIs 
+ 
+You can rapidly display the TAT density functions.
+
+```{r}
+tat_density <- my_data %>%
+  filter(priority == "S") %>%
+  group_by(resulting_lab, test) %>%
+  ggplot(aes(x = otr, fill = test)) +
+  geom_density(alpha = 0.3, col = "NA") +
+  xlim(c(1,150)) +
+  facet_wrap(~resulting_lab)
+tat_density
+```
+
+Wrapping them in ggplotly makes them instantly interactive. What do you notice about K and Na density plots?
+
+```{r}
+ggplotly(tat_density)
+```
+
+Or make them as faceted time series plots
+
+```{r}
+my_data %>%
+  filter(priority == "S") %>%
+  group_by(cdate, resulting_lab, test) %>%
+  summarise(p10 = quantile(otr, probs = 0.1),
+            p50 = quantile(otr, probs = 0.5),
+            p90 = quantile(otr, probs = 0.90)) %>%
+  ggplot() +
+  geom_line(aes(x = cdate, y = as.numeric(p50)), col = "red") +
+  geom_line(aes(x = cdate, y = as.numeric(p10)), col = "blue") +
+  geom_line(aes(x = cdate, y = as.numeric(p90)), col = "blue") + 
+  facet_wrap(test ~ resulting_lab) +
+  theme(axis.text.x = element_text(angle = 90))
+```
+
+## Violin Plots
+
+Another excellent visualization with high information density is the violin plot. It provides in the information of a boxplot but with greater nuance as it petains to the distribution of a continuous variable. Here I have made the day of the week a factor to compare the service level on weekdays vs weekends and I superimpose a boxplot to make sure that the reader has a traditional boxplot view also.
+
+```{r}
+my_data %>%
+  filter(priority == "S" & test == "Troponin T") %>%
+  group_by(weekday, resulting_lab, test) %>%
+  ggplot(aes(x = weekday, y = otr, group = weekday, fill = resulting_lab)) +
+  geom_violin() + 
+  geom_boxplot(width = 0.1) + 
+  ylim(c(0,300)) +
+  facet_wrap(test ~ resulting_lab)
+```
+
+## Hour of Day as a Factor
+
+Returning to a traditional boxplot, we can look at the service level for all the tests as a function of the hour of the day for Hospital 1.
+
+```{r}
+my_data %>%
+  filter(priority == "S" & resulting_lab == "Hospital 1") %>%
+  group_by(hourofday, test) %>%
+  ggplot(aes(x = hourofday, y = otr, group = hourofday, fill = test)) +
+  geom_boxplot(outlier.size = 0.2) + 
+  ylim(c(0,200)) + 
+  facet_wrap(~test)
+```
+
+## Stacking your TAT
+
+The tat components can be considered factors of a stacked barchart. That is, the OTR TAT can be broken down into its components.
+
+```{r}
+my_data %>%
+  filter(priority == "S") %>%
+  group_by(test) %>%
+  summarise(otc = median(otc), ctr = median(ctr), rtr = median(rtr)) %>%
+  pivot_longer(cols = otc:rtr, names_to = "tat_component", values_to = "time") %>%
+  mutate(tat_component = factor(tat_component, levels = c("rtr", "ctr", "otc"))) %>%
+  ggplot(aes(x = test, y = time, fill = tat_component)) +
+  geom_bar(stat = "identity")
+```
+
+## Polar Stacking Variant - the Rose Plot
+
+A rose plot can be a very effective way to compare trends in a time interval. I frequently use these to compare a year of data over the months but here I use it to compare the components over the weekday for this month of data.
+
+```{r}
+annot_x <- rep(2,5)
+annot_y <- seq(0,60,15)
+annot_lab <- paste(seq(0,60,15),"m")
+
+my_data %>%
+  filter(resulting_lab == "Hospital 1", test == "Troponin T", priority == "S") %>%
+  group_by(weekday, test) %>%
+  summarise(otc = median(otc), ctr = median(ctr), rtr = median(rtr)) %>%
+  pivot_longer(cols = otc:rtr, names_to = "tat_component", values_to = "time") %>%
+  mutate(tat_component = factor(tat_component, levels = c("rtr", "ctr", "otc"))) %>%
+  ggplot() +
+  geom_bar(aes(x = weekday, y = time, fill = tat_component), stat = "identity") + 
+  coord_polar() + 
+  scale_y_continuous(breaks = NULL, labels = NULL) + 
+  geom_hline(yintercept = seq(0,60,15),
+             alpha = 0.5,
+             color = "black",
+             linetype = "dotted") +
+  xlab("") + 
+  ylab("") +
+  annotate("text",
+           x = annot_x,
+           y = annot_y,
+           label = annot_lab,
+           color = "black",
+           size = 3.5) +
+ ggtitle("Median of TAT components for Troponin T")
+```
+
+## Automation
+
+In order to have your KPI report be created in a fully automated way, you need three things:
+
++ A way to automatically query your data.
++ A way to automatically trigger your R script to run
++ A way to deliver the report to where it belongs
+
+These processes may differ somewhat based on your operating system of choice. The first thing you need to do is get the data.
+
+### Getting Data the Right Way:  Automated Query
+
+In order to create an automated data extraction, you need to be able to make an [ODBC](https://en.wikipedia.org/wiki/Open_Database_Connectivity) to your database (be that SQL or Cache). This is not very hard but it does require you to have a relationship with the database administrators so you can make your query by direct connection. There are several packages in R that support interaction with a database via an ODBC driver. [This is a helpful article](https://db.rstudio.com/odbc/).
+
+Recently, I had to connect specifically to an Oracle SQL database using R and this required me to either use RODBC with a dedicated Oracle driver or to use [the ROracle package](https://www.oracle.com/ca-en/database/technologies/appdev/roracle.html) which is not supported on R V4.0, meaning you would have to downgrade to use it. 
+
+In any case, once the database connection is made, the text of a SQL query is constructed with the paste() function and then passed to the database. Your data will then appear as a dataframe in the variable name of your choosing.
+
+### Second Best: Timed File Creation
+
+If your database administrators will not allow you to directly query your databases, they may be willing to drop files in a shared folder at timed intervals so that you can just read it when you need it. This is not a bad option but will require you to determine which file in the folder is the one you want. You can usually do this based on the name or the timestamp of the file. R is able to tell you when the file was created so that you can determine which file is the one you want. 
+
+### For the Desperate: Hacks
+
+When you really can't get your data any other way, you can resort to desperation measures such as screen scraping shell sessions or webpages. For screenscraping shell (ie "DOS") sessions, you can look at the Expect language which can be launched from R and dump the screen contents into a text file which you can then parse. I have used this process to get many data sets out of Sunquest.
+
+For screenscraping web pages you can consult any number of [articles like this one](https://www.datacamp.com/community/tutorials/r-web-scraping-rvest) and look at the [rvest](https://cran.r-project.org/web/packages/rvest/rvest.pdf) package.
+
+### Triggering your R Script.
+
+In Mac and Linux OS's you can schedule R tasks to occur at any frequency you like using the command `crontab -e` from the terminal. You will need to [create a shell script that invokes your R script](https://stackoverflow.com/questions/3560641/running-an-rscript-on-mac-os-x).  In Windows you will need to create a Windows batch file that does the same thing. Then you can use the Windows Scheduled Task tool to trigger your R code to run when you want it. This matter of creating scheduled tasks has lots of OS specific nuance and would take a couple of hours in itself. For this reason, R packages have appeared to facilitate scheduled running of R scripts. Please look at the [taskscheduleR](https://cran.r-project.org/web/packages/taskscheduleR/readme/README.html) and [cronR](https://cran.r-project.org/web/packages/cronR/vignettes/cronR.html) packages.
+
+### Emailing your report or the link
+
+Automated sending of emails can be achieved with a number of R packages. There are many of these packages and you just need to pick one that plays nicely with your email server. [See this article](https://blog.mailtrap.io/r-send-email/) for details.
+
+
